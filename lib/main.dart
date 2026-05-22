@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert'; // JSON変換用に追加
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // 端末保存用に追加
 
 void main() {
   runApp(const MyApp());
@@ -26,7 +28,7 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// カレンダーの予定データ
+// カレンダーの予定データ（JSON変換に対応）
 class CalendarEvent {
   final int year;
   final int month;
@@ -34,14 +36,42 @@ class CalendarEvent {
   final String title;
   final Color color; 
   CalendarEvent({required this.year, required this.month, required this.day, required this.title, this.color = const Color(0xFF34A8F2)});
+
+  Map<String, dynamic> toJson() => {
+    'year': year,
+    'month': month,
+    'day': day,
+    'title': title,
+    'color': color.value,
+  };
+
+  factory CalendarEvent.fromJson(Map<String, dynamic> json) => CalendarEvent(
+    year: json['year'],
+    month: json['month'],
+    day: json['day'],
+    title: json['title'],
+    color: Color(json['color']),
+  );
 }
 
-// リマインダーデータ
+// リマインダーデータ（JSON変換に対応）
 class ReminderItemData {
   final int targetMonth;
   final int targetDay; 
   final String title;
   ReminderItemData({required this.targetMonth, required this.targetDay, required this.title});
+
+  Map<String, dynamic> toJson() => {
+    'targetMonth': targetMonth,
+    'targetDay': targetDay,
+    'title': title,
+  };
+
+  factory ReminderItemData.fromJson(Map<String, dynamic> json) => ReminderItemData(
+    targetMonth: json['targetMonth'],
+    targetDay: json['targetDay'],
+    title: json['title'],
+  );
 }
 
 class MainNavigationContainer extends StatefulWidget {
@@ -80,13 +110,14 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
   int _displayMonth = 5;
   int _selectedDay = 20; 
 
-  final List<CalendarEvent> _calendarEvents = [
+  // 初期データ（データが未保存の場合のデフォルト値）
+  List<CalendarEvent> _calendarEvents = [
     CalendarEvent(year: 2026, month: 5, day: 15, title: '会議', color: const Color(0xFF4A90E2)),
     CalendarEvent(year: 2026, month: 5, day: 24, title: '課題提出', color: const Color(0xFFF5A623)),
     CalendarEvent(year: 2026, month: 5, day: 27, title: '予約確認', color: const Color(0xFF4A90E2)),
   ];
 
-  final List<ReminderItemData> _reminderList = [
+  List<ReminderItemData> _reminderList = [
     ReminderItemData(targetMonth: 5, targetDay: 24, title: 'マインドマップ提出'),
     ReminderItemData(targetMonth: 5, targetDay: 27, title: '提出物の締め切り'),
   ];
@@ -104,6 +135,51 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
       parent: _animController,
       curve: Curves.elasticOut, 
     );
+    
+    // 起動時に端末からデータを読み込む
+    _loadSavedData();
+  }
+
+  // 📥 データの読み込み処理
+  Future<void> _loadSavedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _totalMoney = prefs.getInt('totalMoney') ?? 0;
+
+      // カレンダー予定の復元
+      final List<String>? calendarJsonList = prefs.getStringList('calendarEvents');
+      if (calendarJsonList != null) {
+        _calendarEvents = calendarJsonList
+            .map((item) => CalendarEvent.fromJson(jsonDecode(item)))
+            .toList();
+      }
+
+      // リマインダーの復元
+      final List<String>? reminderJsonList = prefs.getStringList('reminderList');
+      if (reminderJsonList != null) {
+        _reminderList = reminderJsonList
+            .map((item) => ReminderItemData.fromJson(jsonDecode(item)))
+            .toList();
+      }
+    });
+  }
+
+  // 💾 データの保存処理
+  Future<void> _saveAllData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('totalMoney', _totalMoney);
+
+    // カレンダーを文字列リストにシリアライズして保存
+    List<String> calendarJsonList = _calendarEvents
+        .map((event) => jsonEncode(event.toJson()))
+        .toList();
+    await prefs.setStringList('calendarEvents', calendarJsonList);
+
+    // リマインダーを文字列リストにシリアライズして保存
+    List<String> reminderJsonList = _reminderList
+        .map((item) => jsonEncode(item.toJson()))
+        .toList();
+    await prefs.setStringList('reminderList', reminderJsonList);
   }
 
   int _calculateLevel(int money) {
@@ -159,7 +235,6 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
     _elapsedSeconds = 0; 
     setState(() { _currentBaitScreen = 3; });
     
-    // 通常の1秒刻みのタイマー（検証用モードは削除）
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_remainingSeconds > 0) {
         setState(() {
@@ -193,6 +268,9 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
         _showLevelUpMotion = false;
       }
     });
+    
+    // お金が変動したので自動セーブ
+    _saveAllData();
   }
 
   void _resetAndGoHome() {
@@ -263,6 +341,8 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
                       ));
                     }
                   });
+                  // 予定が追加されたので自動セーブ
+                  _saveAllData();
                 }
                 Navigator.pop(context);
               },
@@ -601,6 +681,8 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
                 setState(() {
                   _calendarEvents.add(CalendarEvent(year: _displayYear, month: _displayMonth, day: _selectedDay, title: freqTitle));
                 });
+                // クイック予定追加時も自動セーブ
+                _saveAllData();
               },
               child: Text(freqTitle, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
             ),
@@ -906,6 +988,8 @@ class _MainNavigationContainerState extends State<MainNavigationContainer> with 
                     title: titleController.text
                   ));
                 });
+                // リマインダー追加時も自動セーブ
+                _saveAllData();
               }
               Navigator.pop(context);
             }
